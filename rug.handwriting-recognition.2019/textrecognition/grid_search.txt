@@ -1,0 +1,202 @@
+from keras.preprocessing.image import ImageDataGenerator
+
+import textrecognition.HwAlexNet
+
+from data import getdata
+
+import matplotlib
+
+from sklearn.preprocessing import LabelBinarizer
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import classification_report, confusion_matrix
+from keras.models import Sequential
+from keras.layers.core import Dense
+from keras.optimizers import SGD, rmsprop
+from imutils import paths
+import matplotlib.pyplot as plt
+import numpy as np
+import argparse
+import random
+import pickle
+import cv2
+import os
+from pycm import ConfusionMatrix
+from loadDataset import create_hist
+import tensorflow as tf
+from keras.models import load_model
+from keras.callbacks import CSVLogger
+
+# Pretraining the network with the syntetic font dataset
+matplotlib.use("Agg")
+
+args = {
+    "dataset": "habbakuk/font_dataset",
+#    "dataset": "monkbrill2",
+    "plot": "output_font/font_cnn_plot.png",
+    "model": "output_font/font_cnn_drop.h5",
+    "label_bin": "output_font/font_cnn_lb.pickle",
+}
+
+print("[INFO] loading images...")
+
+data, labels = getdata(args["dataset"])
+
+label_list = np.unique(labels)
+
+create_hist(labels)
+
+(trainX, testX, trainY, testY) = train_test_split(data,
+                                                  labels, test_size=0.25, random_state=42)
+
+lb = LabelBinarizer()
+trainY = lb.fit_transform(trainY)
+testY = lb.transform(testY)
+
+print(labels)
+
+aug = ImageDataGenerator(rotation_range=15, width_shift_range=0.2, height_shift_range=0.2, shear_range=0.2)
+
+new_data = aug.flow(trainX, trainY, batch_size=9, save_to_dir='images', save_prefix='aug', save_format='png')
+
+model = HwAlexNet.build(width=56, height=56, depth=1,
+	classes=len(lb.classes_))
+
+INIT_LR=0.01
+EPOCHS = 50
+BS = 32
+
+print("[INFO] training network...")
+opt = SGD(lr=INIT_LR, decay=1e-6)
+
+def focal_loss_fixed(y_true, y_pred):
+    """Focal loss for multi-classification
+    FL(p_t)=-alpha(1-p_t)^{gamma}ln(p_t)
+    Notice: y_pred is probability after softmax
+    gradient is d(Fl)/d(p_t) not d(Fl)/d(x) as described in paper
+    d(Fl)/d(p_t) * [p_t(1-p_t)] = d(Fl)/d(x)
+    Focal Loss for Dense Object Detection
+    https://arxiv.org/abs/1708.02002
+
+    Arguments:
+        y_true {tensor} -- ground truth labels, shape of [batch_size, num_cls]
+        y_pred {tensor} -- model's output, shape of [batch_size, num_cls]
+
+    Keyword Arguments:
+        gamma {float} -- (default: {2.0})
+        alpha {float} -- (default: {4.0})
+
+    Returns:
+        [tensor] -- loss.
+    """
+    gamma = 1.
+    alpha = 0.99
+    epsilon = 1.e-9
+    y_true = tf.convert_to_tensor(y_true, tf.float32)
+    y_pred = tf.convert_to_tensor(y_pred, tf.float32)
+
+    model_out = tf.add(y_pred, epsilon)
+    ce = tf.multiply(y_true, -tf.log(model_out))
+    weight = tf.multiply(y_true, tf.pow(tf.subtract(1., model_out), gamma))
+    fl = tf.multiply(alpha, tf.multiply(weight, ce))
+    reduced_fl = tf.reduce_max(fl, axis=1)
+    return tf.reduce_mean(reduced_fl)
+
+model.compile(loss=focal_loss_fixed, optimizer=opt,  metrics=["accuracy"])
+
+H = model.fit_generator(aug.flow(trainX, trainY, batch_size=BS),
+                       validation_data=(testX, testY), steps_per_epoch=len(trainX)//BS,
+                    epochs=EPOCHS)
+
+print("[INFO] serializing network and label binarizer...")
+model.save(args["model"])
+f = open(args["label_bin"], "wb")
+f.write(pickle.dumps(lb))
+f.close()
+
+# Retrain the network with the real training data set
+
+matplotlib.use("Agg")
+
+args = {
+    "dataset": "monkbrill2",
+    "plot": "output/final_cnn_plot.png",
+    "model": "output/final_cnn.h5",
+    "label_bin": "output/final_cnn_lb.pickle",
+    "pretrained_model": "output_font/font_cnn_drop.h5"
+}
+
+print("[INFO] loading images...")
+
+data, labels = getdata(args["dataset"])
+
+label_list = np.unique(labels)
+
+create_hist(labels)
+
+(trainX, testX, trainY, testY) = train_test_split(data,
+                                                  labels, test_size=0.25, random_state=42)
+
+lb = LabelBinarizer()
+trainY = lb.fit_transform(trainY)
+testY = lb.transform(testY)
+
+print(labels)
+
+aug = ImageDataGenerator(rotation_range=20, fill_mode="nearest", width_shift_range=0.2, height_shift_range=0.2)
+
+INIT_LR=0.01
+EPOCHS = 200
+BS = 32
+
+print("[INFO] training network...")
+
+# def focal_loss_fixed(y_true, y_pred):
+#     """Focal loss for multi-classification
+#     FL(p_t)=-alpha(1-p_t)^{gamma}ln(p_t)
+#     Notice: y_pred is probability after softmax
+#     gradient is d(Fl)/d(p_t) not d(Fl)/d(x) as described in paper
+#     d(Fl)/d(p_t) * [p_t(1-p_t)] = d(Fl)/d(x)
+#     Focal Loss for Dense Object Detection
+#     https://arxiv.org/abs/1708.02002
+
+#     Arguments:
+#         y_true {tensor} -- ground truth labels, shape of [batch_size, num_cls]
+#         y_pred {tensor} -- model's output, shape of [batch_size, num_cls]
+
+#     Keyword Arguments:
+#         gamma {float} -- (default: {2.0})
+#         alpha {float} -- (default: {4.0})
+
+#     Returns:
+#         [tensor] -- loss.
+#     """
+#     gamma = 1.
+#     alpha = 0.99
+#     epsilon = 1.e-9
+#     y_true = tf.convert_to_tensor(y_true, tf.float32)
+#     y_pred = tf.convert_to_tensor(y_pred, tf.float32)
+
+#     model_out = tf.add(y_pred, epsilon)
+#     ce = tf.multiply(y_true, -tf.log(model_out))
+#     weight = tf.multiply(y_true, tf.pow(tf.subtract(1., model_out), gamma))
+#     fl = tf.multiply(alpha, tf.multiply(weight, ce))
+#     reduced_fl = tf.reduce_max(fl, axis=1)
+#     return tf.reduce_mean(reduced_fl)
+
+model = load_model(args["pretrained_model"], custom_objects={'focal_loss_fixed': focal_loss_fixed})
+
+csv_logger = CSVLogger('log_BATCH_DROP.csv', append=True, separator=';')
+
+aug.fit(trainX)
+
+H = model.fit_generator(aug.flow(trainX, trainY, batch_size=BS),
+                       validation_data=(testX, testY), steps_per_epoch=len(trainX)//BS,
+                    epochs=EPOCHS, callbacks=[csv_logger], workers=4)
+
+results = model.evaluate(testX, testY)
+print(results)
+
+print("[INFO] evaluating network...")
+predictions = model.predict(testX, batch_size=32)
+print(classification_report(testY.argmax(axis=1),
+                            predictions.argmax(axis=1), target_names=lb.classes_))
