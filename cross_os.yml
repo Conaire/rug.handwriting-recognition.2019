@@ -1,0 +1,22 @@
+name: hwr
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python==3.7
+  - pip
+  - pip:
+    - opencv-contrib-python
+    - pillow
+    - imutils
+    - python-docx
+    - scipy
+    - scikit-image
+    - xlrd
+    - tensorflow
+    - keras
+    - scikit-learn
+    - pycm==2.1
+    - numpy
+    - pandas
+    - matplotlib
